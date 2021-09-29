@@ -3,15 +3,15 @@ $(function () {
 
     window.chatwoot = {};
     // update the inbox identifier
-    chatwoot.inboxIdentifier = "bXKr2F2asDjztoVipLF9Lt8v";
-    chatwoot.chatwootAPIUrl = "http://localhost:3000/public/api/v1/"
+    chatwoot.inboxIdentifier = "LfUdBT7BXwaghueSX2iAh6V2";
+    chatwoot.chatwootAPIUrl = "https://weunlearn.hopto.org/public/api/v1/"
 
     // for better performance - to avoid searching in DOM
     var content = $('#content');
     var input = $('#input');
     var status = $('#status');
     var xhttp = new XMLHttpRequest();
-
+    const hmac_key = "U7EucWM7Kqt4CgjQjRixYpRU";
 
     // if user is running mozilla then use it's built-in WebSocket
     window.WebSocket = window.WebSocket || window.MozWebSocket;
@@ -26,7 +26,7 @@ $(function () {
     }
 
     // open connection
-    var connection = new WebSocket('ws://localhost:3000/cable');
+    var connection = new WebSocket('wss://weunlearn.hopto.org/cable');
 
     connection.onopen = function () {
         // check whether we have a pubsub token and contact identifier or else set one
@@ -113,56 +113,161 @@ $(function () {
     }
 
     function setUpContact() {
-      if(getCookie('contactIdentifier')){
-        chatwoot.contactIdentifier = getCookie('contactIdentifier');
-        chatwoot.contactPubsubToken = getCookie('contactPubsubToken')
-      }else{
-        xhttp.open("POST", chatwoot.chatwootAPIUrl + "inboxes/"+chatwoot.inboxIdentifier+"/contacts");
-        xhttp.send();
-        var contactPubsubToken = JSON.parse(xhttp.responseText).pubsub_token;
-        var contactIdentifier = JSON.parse(xhttp.responseText).source_id;
-        setCookie('contactIdentifier',contactIdentifier,30);
-        setCookie('contactPubsubToken',contactPubsubToken,30);
+        console.log("In setUpContact: ");
+
+        var digits = Math.floor(Math.random() * 9000000000) + 1000000000;
+        let phone_number = "+91"+digits;
+
+        if(localStorage.getItem("contactIdentifier")==undefined) {
+            localStorage.clear();
+        }
+      if(localStorage.getItem('contactIdentifier')) {
+        chatwoot.contactIdentifier = localStorage.getItem('contactIdentifier');
+        chatwoot.contactPubsubToken = localStorage.getItem('contactPubsubToken');
+        console.log("Contact details: ",chatwoot.contactIdentifier, chatwoot.contactPubsubToken);
       }
+      else {
+          console.log("Calling createContact in setUpContact!");
+          createContact(phone_number);
+      }
+    }
+
+
+    function createContact(phone_number) {
+        console.log(phone_number);
+        let phone = phone_number.substring(3, phone_number.length);
+        console.log(phone);
+        var hash = CryptoJS.HmacSHA256(phone, hmac_key);
+        var hashInHex = CryptoJS.enc.Hex.stringify(hash);
+        var contactPubsubToken;
+        var contactIdentifier;
+        var data = JSON.stringify({
+            "identifier": phone,
+            "identifier_hash": hashInHex,
+            "name": phone,
+            "phone_number": phone_number
+        });
+
+        var xhr = new XMLHttpRequest();
+
+        xhr.addEventListener("readystatechange", function() {
+            if(this.readyState === 4) {
+                console.log("In createContact: ",this.responseText);
+                try {
+                    let res = JSON.parse(this.responseText);
+                    contactIdentifier = res.source_id;
+                    contactPubsubToken = res.pubsub_token;
+                    localStorage.setItem("contactIdentifier", contactIdentifier);
+                    localStorage.setItem("contactPubsubToken", contactPubsubToken);
+                } catch(e) {
+                    console.log(e);
+                }
+            }
+        });
+
+        xhr.open("POST", "https://weunlearn.hopto.org/public/api/v1/inboxes/LfUdBT7BXwaghueSX2iAh6V2/contacts", false);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.send(data);
     }
 
     function setUpConversation() {
-      if(getCookie('contactConverstion')){
-        chatwoot.contactConverstion = getCookie('contactConverstion');
-      }else{
-        xhttp.open("POST", chatwoot.chatwootAPIUrl + "inboxes/"+chatwoot.inboxIdentifier+"/contacts/"+chatwoot.contactIdentifier+"/conversations", false);
-        xhttp.send();
-        var contactConverstion = JSON.parse(xhttp.responseText).id;
-        setCookie('contactConverstion',contactConverstion,30);
+        console.log("In setUpConversation: ");
+      if(localStorage.getItem('contactConverstion')){
+        chatwoot.contactConverstion = localStorage.getItem('contactConverstion');
+        console.log("Conversation id: ",chatwoot.contactConverstion);
+        getMessages();
+      }
+      else {
+          console.log("Calling createConversation in setUpConversation!");
+          while(chatwoot.contactIdentifier==undefined) {
+              chatwoot.contactIdentifier = localStorage.getItem('contactIdentifier');
+          }
+          createConversation();
       }
     }
 
-    function sendMessage(msg){
-      xhttp.open("POST", chatwoot.chatwootAPIUrl + "inboxes/"+chatwoot.inboxIdentifier+"/contacts/"+chatwoot.contactIdentifier+"/conversations/"+chatwoot.contactConverstion+"/messages", false);
-      xhttp.setRequestHeader("Content-Type", "application/json;charset=UTF-8");
-      xhttp.send(JSON.stringify({content: msg}));
+    function getMessages() {
+        var data = JSON.stringify({
+            "conversation_id": chatwoot.contactConverstion
+        });
+
+        var xhr = new XMLHttpRequest();
+
+        xhr.addEventListener("readystatechange", function() {
+            if(this.readyState === 4) {
+                console.log(this.responseText);
+                try {
+                    let res_arr = JSON.parse(this.responseText);
+                    const n = res_arr.length;
+                    var i;
+                    for(i=0; i<n; i++) {
+                        if(res_arr[i].message_type==1) {
+                            addMessage("WeUnlearn", res_arr[i].content);
+                        } else if(res_arr[i].message_type==0) {
+                            addMessage("Me", res_arr[i].content);
+                        }
+                    }
+
+                } catch(e) {
+
+                }
+            }
+        });
+
+        xhr.open("GET", chatwoot.chatwootAPIUrl+"inboxes/"+chatwoot.inboxIdentifier+"/contacts/"+chatwoot.contactIdentifier+"/conversations/"+chatwoot.contactConverstion+"/messages", false);
+        xhr.setRequestHeader("Content-Type", "application/json");
+
+        xhr.send(data);
     }
 
-    function setCookie(name,value,days) {
-        var expires = "";
-        if (days) {
-            var date = new Date();
-            date.setTime(date.getTime() + (days*24*60*60*1000));
-            expires = "; expires=" + date.toUTCString();
+    function createConversation() {
+        var contactConversation;
+        var data = "";
+        var xhr = new XMLHttpRequest();
+
+        xhr.addEventListener("readystatechange", function() {
+            if(this.readyState === 4) {
+                console.log(this.responseText);
+                try {
+                    console.log("In createConversation: ",this.responseText);
+                    let res = JSON.parse(this.responseText);
+                    contactConversation = res.id;
+                    chatwoot.contactConverstion = res.id;
+                    console.log("convo id: ",contactConversation);
+                    localStorage.setItem("contactConverstion",contactConversation);
+                } catch (e) {
+                    console.log(e);
+                }
+            }
+        });
+
+
+        xhr.open("POST", chatwoot.chatwootAPIUrl+"inboxes/"+chatwoot.inboxIdentifier+"/contacts/"+chatwoot.contactIdentifier+"/conversations", false);
+        xhr.send(data);
+    }
+
+    function sendMessage(msg){
+
+        if(chatwoot.contactConverstion==undefined) {
+            localStorage.removeItem("contactConverstion");
+            chatwoot.contactIdentifier = localStorage.getItem("contactIdentifier");
+            setUpConversation();
         }
-        document.cookie = name + "=" + (value || "")  + expires + "; path=/";
+
+        var data = JSON.stringify({
+            "content": msg
+        });
+
+        var xhr = new XMLHttpRequest();
+        xhr.addEventListener("readystatechange", function() {
+            if(this.readyState === 4) {
+                console.log("In sendMessage: ",this.responseText);
+            }
+        });
+
+        xhr.open("POST", chatwoot.chatwootAPIUrl+"inboxes/"+chatwoot.inboxIdentifier+"/contacts/"+chatwoot.contactIdentifier+"/conversations/"+chatwoot.contactConverstion+"/messages", false);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.send(data);
     }
-    function getCookie(name) {
-        var nameEQ = name + "=";
-        var ca = document.cookie.split(';');
-        for(var i=0;i < ca.length;i++) {
-            var c = ca[i];
-            while (c.charAt(0)==' ') c = c.substring(1,c.length);
-            if (c.indexOf(nameEQ) == 0) return c.substring(nameEQ.length,c.length);
-        }
-        return null;
-    }
-    function eraseCookie(name) {   
-        document.cookie = name +'=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;';
-    }
+
 });
